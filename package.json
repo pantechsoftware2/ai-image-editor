@@ -1,0 +1,43 @@
+{
+  "name": "ai-image-editor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@google-cloud/vertexai": "^1.10.0",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-slot": "^1.2.4",
+    "@supabase/supabase-js": "^2.89.0",
+    "axios": "^1.13.2",
+    "cheerio": "^1.1.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "dotenv": "^17.2.3",
+    "fabric": "^7.0.0",
+    "lucide-react": "^0.562.0",
+    "next": "16.1.1",
+    "puppeteer": "^24.34.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "shadcn-ui": "^0.9.5",
+    "tailwind-merge": "^3.4.0",
+    "tailwindcss-animate": "^1.0.7",
+    "zustand": "^5.0.9"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.23",
+    "eslint": "^9",
+    "eslint-config-next": "16.1.1",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
