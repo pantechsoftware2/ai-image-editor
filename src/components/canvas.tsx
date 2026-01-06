@@ -297,23 +297,28 @@ export function Canvas({ brandData }: { brandData?: any }) {
         }),
       })
 
-      if (!response.ok) {
-        throw new Error('Failed to generate images')
-      }
-
       const data = await response.json()
 
-      if (data.success && data.images) {
+      if (!response.ok) {
+        console.error('❌ API Error:', data)
+        throw new Error(data.error || `Failed to generate images (${response.status})`)
+      }
+
+      if (data.success && data.images && data.images.length > 0) {
         console.log('✨ Generated images:', data.images.length)
         setGeneratedImages(data.images)
         setShowImageGrid(true)
         setPromptInput('')
       } else {
-        throw new Error(data.error || 'Failed to generate images')
+        console.error('❌ No images in response:', data)
+        throw new Error(data.error || 'No images were generated. Try a different prompt.')
       }
     } catch (error: any) {
-      console.error('Generation error:', error)
-      alert(`❌ Error: ${error.message}`)
+      console.error('🔴 Generation error:', error)
+      const errorMessage = error?.message || 'Unknown error'
+      alert(
+        `❌ Error: ${errorMessage}\n\nMake sure your Google Cloud credentials are configured correctly.`
+      )
     } finally {
       setGeneratingImages(false)
     }

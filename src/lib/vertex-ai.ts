@@ -1,19 +1,28 @@
 /**
  * Vertex AI Service
  * Wrapper for Google Cloud Vertex AI for Imagen-4 image generation
+ * NOTE: This must only be called from server-side API routes
  */
 
 import { VertexAI } from '@google-cloud/vertexai'
 
-// Initialize Vertex AI
-const project = process.env.GOOGLE_CLOUD_PROJECT_ID || ''
-const location = process.env.GOOGLE_CLOUD_REGION || 'us-central1'
-
-// Create Vertex AI client (server-side only)
+// Server-side only - Initialize Vertex AI
 function getVertexAI(): VertexAI {
-  if (!project) {
-    throw new Error('GOOGLE_CLOUD_PROJECT_ID environment variable is required')
+  if (typeof window !== 'undefined') {
+    throw new Error('Vertex AI SDK can only be used server-side')
   }
+
+  const project = process.env.GOOGLE_CLOUD_PROJECT_ID
+  const location = process.env.GOOGLE_CLOUD_REGION || 'us-central1'
+
+  if (!project) {
+    throw new Error(
+      'GOOGLE_CLOUD_PROJECT_ID environment variable is required. ' +
+      'Set it in your .env.local file'
+    )
+  }
+
+  console.log(`🔐 Initializing Vertex AI with project: ${project}, location: ${location}`)
 
   return new VertexAI({
     project,
@@ -34,11 +43,16 @@ export interface ImageGenerationOptions {
  */
 export async function generateImages(options: ImageGenerationOptions): Promise<string[]> {
   try {
+    console.log('📸 Starting image generation...')
+    console.log('📝 Prompt:', options.prompt.substring(0, 100) + '...')
+
     const vertexAI = getVertexAI()
+    console.log('✅ Vertex AI initialized')
 
     const generativeModel = vertexAI.getGenerativeModel({
       model: 'imagen-4.0-fast-generate',
     })
+    console.log('✅ Generative model loaded')
 
     const request = {
       contents: [
@@ -76,29 +90,45 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       ],
     }
 
-    console.log('Generating images with prompt:', options.prompt)
-
+    console.log('🚀 Calling Imagen-4 API...')
     const response = await generativeModel.generateContent(request)
+    console.log('📦 Response received:', response ? 'success' : 'no response')
 
     // Extract images from response
     const images: string[] = []
 
+    console.log('🔍 Parsing response...')
+    console.log('Response structure:', {
+      hasResponse: !!response.response,
+      hasCandidates: !!response.response?.candidates,
+      candidatesCount: response.response?.candidates?.length || 0,
+    })
+
     if (response.response && response.response.candidates) {
-      for (const candidate of response.response.candidates) {
+      for (let i = 0; i < response.response.candidates.length; i++) {
+        const candidate = response.response.candidates[i]
+        console.log(`Candidate ${i}:`, {
+          hasContent: !!candidate.content,
+          partsCount: candidate.content?.parts?.length || 0,
+        })
+
         if (candidate.content && candidate.content.parts) {
           for (const part of candidate.content.parts) {
             // Handle image response (check for inline_data with image)
             if ('inline_data' in part && part.inline_data) {
               const data = part.inline_data as any
+              console.log('Found inline_data:', { mimeType: data.mime_type })
               if (data.mime_type && data.mime_type.startsWith('image/')) {
+                console.log('✅ Found base64 image data')
                 images.push(data.data) // base64 string
               }
             }
-            // Handle image response from Imagen specifically
+            // Handle text response that might contain base64
             if ('text' in part) {
               const text = part.text as string
               // Imagen returns base64 in text format
               if (text && text.length > 100 && !text.includes(' ')) {
+                console.log('✅ Found base64 in text response')
                 images.push(text)
               }
             }
@@ -107,15 +137,19 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       }
     }
 
-    // If we didn't get images from Imagen, try the image response format
+    // If we didn't get images from standard response, try alternative formats
     if (images.length === 0) {
-      // Imagen-4 fast generate returns images in a specific format
+      console.log('⚠️ No images found in standard format, trying alternatives...')
+      // Imagen-4 fast generate might return images in a different format
       const candidates = (response as any).candidates || (response as any).imageResponses
+      console.log('Looking for alternative formats:', { hasCandidates: !!candidates })
       if (Array.isArray(candidates)) {
         for (const item of candidates) {
           if (item.images) {
+            console.log('Found images array:', { count: item.images.length })
             for (const img of item.images) {
               if (img.bytesBase64Encoded) {
+                console.log('✅ Found bytesBase64Encoded')
                 images.push(img.bytesBase64Encoded)
               }
             }
@@ -124,13 +158,25 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       }
     }
 
-    console.log(`Generated ${images.length} images`)
+    console.log(`🎉 Extracted ${images.length} images from response`)
 
-    // Return 4 variants (or however many we got)
+    if (images.length === 0) {
+      console.warn('⚠️ No images extracted. Full response:', JSON.stringify(response, null, 2))
+      throw new Error(
+        'Imagen-4 did not return any images. This may be due to content filtering or API limits.'
+      )
+    }
+
     return images.slice(0, 4)
-  } catch (error) {
-    console.error('Error generating images:', error)
-    throw error
+  } catch (error: any) {
+    console.error('❌ Error in generateImages:', error)
+    console.error('Error details:', {
+      name: error?.name,
+      message: error?.message,
+      code: error?.code,
+      status: error?.status,
+    })
+    throw new Error(`Image generation failed: ${error?.message || 'Unknown error'}`)
   }
 }
 
