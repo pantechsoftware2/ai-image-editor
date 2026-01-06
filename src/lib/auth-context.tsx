@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState, useCallback } from 'react'
 import { Session, User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase'
 
@@ -20,74 +20,158 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
-  const supabase = createClient()
+  const [supabase] = useState(() => createClient())
 
   useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((event, session) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
+    let isMounted = true
 
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session)
-      setUser(session?.user ?? null)
-      setLoading(false)
-    })
+    const initAuth = async () => {
+      try {
+        const {
+          data: { subscription },
+        } = supabase.auth.onAuthStateChange((event, newSession) => {
+          if (isMounted) {
+            setSession(newSession)
+            setUser(newSession?.user ?? null)
+          }
+        })
 
-    return () => subscription.unsubscribe()
+        const { data, error } = await supabase.auth.getSession()
+        if (isMounted) {
+          if (!error) {
+            setSession(data.session)
+            setUser(data.session?.user ?? null)
+          }
+          setLoading(false)
+        }
+
+        return () => subscription.unsubscribe()
+      } catch (error) {
+        console.error('Auth init error:', error)
+        if (isMounted) {
+          setLoading(false)
+        }
+      }
+    }
+
+    const cleanup = initAuth()
+
+    return () => {
+      isMounted = false
+      cleanup.then((fn) => fn?.())
+    }
   }, [supabase])
 
-  const signOut = async () => {
-    await supabase.auth.signOut()
-  }
+  const signOut = useCallback(async () => {
+    try {
+      const { error } = await supabase.auth.signOut()
+      if (error) {
+        console.error('Sign out error:', error)
+        throw error
+      }
+    } catch (error) {
+      console.error('Sign out failed:', error)
+      throw error
+    }
+  }, [supabase])
 
-  const signInWithGoogle = async () => {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: `${typeof window !== 'undefined' ? window.location.origin : ''}/auth/callback`,
-      },
-    })
-    if (error) throw error
-  }
+  const getRedirectUrl = useCallback(() => {
+    if (typeof window === 'undefined') return '/auth/callback'
+    return `${window.location.origin}/auth/callback`
+  }, [])
 
-  const signUpWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signUp({
-      email,
-      password,
-      options: {
-        emailRedirectTo: `${typeof window !== 'undefined' ? window.location.origin : ''}/auth/callback`,
-      },
-    })
-    if (error) throw error
-  }
+  const signInWithGoogle = useCallback(async () => {
+    try {
+      const redirectUrl = getRedirectUrl()
+      console.log('Initiating Google OAuth with redirect:', redirectUrl)
 
-  const signInWithEmail = async (email: string, password: string) => {
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    })
-    if (error) throw error
-  }
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUrl,
+          skipBrowserRedirect: false,
+        },
+      })
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        session,
-        loading,
-        signOut,
-        signInWithGoogle,
-        signUpWithEmail,
-        signInWithEmail,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
+      if (error) {
+        console.error('Google sign in error:', error)
+        throw new Error(error.message || 'Failed to sign in with Google')
+      }
+
+      console.log('Google OAuth initiated:', data)
+    } catch (error) {
+      console.error('Google sign in failed:', error)
+      throw error
+    }
+  }, [supabase, getRedirectUrl])
+
+  const signUpWithEmail = useCallback(
+    async (email: string, password: string) => {
+      try {
+        console.log('Signing up with email:', email)
+
+        const redirectUrl = getRedirectUrl()
+
+        const { data, error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: redirectUrl,
+            data: {
+              full_name: '',
+            },
+          },
+        })
+
+        if (error) {
+          console.error('Sign up error:', error)
+          throw new Error(error.message || 'Failed to sign up')
+        }
+
+        console.log('Sign up successful:', data)
+      } catch (error) {
+        console.error('Sign up failed:', error)
+        throw error
+      }
+    },
+    [supabase, getRedirectUrl]
   )
+
+  const signInWithEmail = useCallback(
+    async (email: string, password: string) => {
+      try {
+        console.log('Signing in with email:', email)
+
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        })
+
+        if (error) {
+          console.error('Sign in error:', error)
+          throw new Error(error.message || 'Failed to sign in')
+        }
+
+        console.log('Sign in successful:', data)
+      } catch (error) {
+        console.error('Sign in failed:', error)
+        throw error
+      }
+    },
+    [supabase]
+  )
+
+  const value: AuthContextType = {
+    user,
+    session,
+    loading,
+    signOut,
+    signInWithGoogle,
+    signUpWithEmail,
+    signInWithEmail,
+  }
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
 
 export function useAuth() {
