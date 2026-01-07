@@ -19,7 +19,7 @@ function getSupabaseClient() {
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
     const authHeader = request.headers.get('Authorization')
@@ -41,11 +41,14 @@ export async function GET(
       )
     }
 
+    // Await the params Promise
+    const { id } = await params
+
     // Fetch project
     const { data, error } = await supabase
       .from('projects')
       .select('*')
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id)
       .single()
 
@@ -71,7 +74,7 @@ export async function GET(
 
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ): Promise<NextResponse> {
   try {
     const authHeader = request.headers.get('Authorization')
@@ -93,11 +96,14 @@ export async function DELETE(
       )
     }
 
+    // Await the params Promise
+    const { id } = await params
+
     // Delete project
     const { error } = await supabase
       .from('projects')
       .delete()
-      .eq('id', params.id)
+      .eq('id', id)
       .eq('user_id', user.id)
 
     if (error) {
@@ -108,7 +114,7 @@ export async function DELETE(
       )
     }
 
-    console.log(`✅ Project deleted: ${params.id}`)
+    console.log(`✅ Project deleted: ${id}`)
 
     return NextResponse.json({
       success: true,
