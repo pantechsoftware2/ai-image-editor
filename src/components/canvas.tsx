@@ -9,6 +9,25 @@ import { exportCanvasToImage, serializeCanvasState, deserializeCanvasState } fro
 import { createClient } from '@/lib/supabase'
 import Link from 'next/link'
 
+/**
+ * Single attempt - NO RETRIES on 429
+ * 429 means quota exhausted - retrying makes it worse
+ */
+async function fetchWithRetry(
+  url: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  console.log(`🔄 Making single API request (no retries on 429)...`)
+  const response = await fetch(url, options)
+  
+  if (response.status === 429) {
+    console.log(`⏳ Got 429 - Server says: wait before next request`)
+    // Don't retry - just return the response
+  }
+  
+  return response
+}
+
 interface CanvasTemplate {
   name: string
   id: string
@@ -477,16 +496,22 @@ export function Canvas({ brandData }: { brandData?: any }) {
   }
 
   const generateImages = async () => {
+    // GUARD: Prevent concurrent requests
+    if (generatingImages) {
+      console.warn('⚠️ Image generation already in progress, ignoring duplicate request')
+      return
+    }
+
     const prompt = promptInput.trim()
     if (!prompt) {
       alert('❌ Please enter a description (e.g., "a steaming cup of coffee")')
       return
     }
 
-    // Prevent rapid successive requests (minimum 30 seconds between requests)
+    // Prevent rapid successive requests (minimum 20 seconds between requests)
     const now = Date.now()
     const timeSinceLastRequest = now - lastRequestTimeRef.current
-    const minDelayMs = 30000 // 30 seconds to respect server-side rate limiting
+    const minDelayMs = 20000 // 20 seconds to respect server-side rate limiting
 
     if (timeSinceLastRequest < minDelayMs) {
       const waitMs = minDelayMs - timeSinceLastRequest
@@ -507,7 +532,7 @@ export function Canvas({ brandData }: { brandData?: any }) {
       console.log('🚀 Generating images with prompt:', prompt)
       console.log('🎨 Using AI Text Effects:', useAIText)
 
-      const response = await fetch('/api/generateImage', {
+      const response = await fetchWithRetry('/api/generateImage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -552,19 +577,29 @@ export function Canvas({ brandData }: { brandData?: any }) {
       // Format error message based on type
       let displayMessage = `❌ Error: ${errorMessage}`
       
-      if (errorMessage.includes('Quota exceeded') || errorMessage.includes('429')) {
+      if (errorMessage.includes('429') || errorMessage.includes('Too Many Requests') || errorMessage.includes('wait')) {
         displayMessage = 
-          `⚠️ Quota Exceeded - Image generation service rate limit hit.\n\n` +
+          `⏳ Please Wait - Rate Limited\n\n` +
+          `The server is protecting the quota. Wait 15+ seconds before trying again.\n\n` +
+          `Message: ${errorMessage}`
+        addToast(displayMessage, 'warning', 10000)
+      } else if (errorMessage.includes('Quota exceeded')) {
+        displayMessage = 
+          `⚠️ Quota Exceeded - Image generation service hit quota limit.\n\n` +
           `Solutions:\n` +
           `1. ⏳ Wait 2-5 minutes and try again\n` +
           `2. 📈 Request a quota increase on Google Cloud Console\n` +
-          `3. 💡 Avoid rapid consecutive requests`
+          `3. 💡 Check billing is enabled and APIs are activated`
         addToast(displayMessage, 'warning', 5000)
-      } else if (errorMessage.includes('authentication') || errorMessage.includes('GOOGLE_CLOUD_PROJECT_ID') || errorMessage.includes('credentials')) {
+      } else if (errorMessage.includes('authentication') || errorMessage.includes('UNAUTHENTICATED') || errorMessage.includes('credentials')) {
         displayMessage =
-          `❌ Auth Error - Google Cloud credentials not configured.\n\n` +
-          `Run: gcloud auth application-default login`
-        addToast(displayMessage, 'error', 5000)
+          `❌ Authentication Failed\n\n` +
+          `The server cannot access Google Cloud credentials.\n\n` +
+          `Fix:\n` +
+          `1. Run: gcloud auth application-default login\n` +
+          `2. Restart the dev server: npm run dev\n` +
+          `3. Try generating images again`
+        addToast(displayMessage, 'error', 6000)
       } else {
         addToast(displayMessage, 'error', 3000)
       }
@@ -572,7 +607,6 @@ export function Canvas({ brandData }: { brandData?: any }) {
       setGeneratingImages(false)
     }
   }
-
   const handleImageSelect = async (image: any) => {
     if (!fabricCanvasRef.current) return
 
@@ -599,8 +633,10 @@ export function Canvas({ brandData }: { brandData?: any }) {
         fabricCanvasRef.current!.renderAll()
         console.log('✅ Image added to canvas as background')
         
-        // Auto-generate and add headline text
-        await generateAndAddHeadline()
+        // Delay headline generation to avoid cooldown collision
+        setTimeout(() => {
+          generateAndAddHeadline()
+        }, 20000) // Wait 20 seconds before generating headline
       }
 
       img.src = imgUrl

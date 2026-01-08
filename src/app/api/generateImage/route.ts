@@ -1,6 +1,7 @@
 /**
  * API Route: /api/generateImage
- * Generates 4 image variants using Imagen-4 and stores in Supabase Storage
+ * Generates 1 image variant using Imagen-4 and stores in Supabase Storage
+ * CRITICAL: 15-second cooldown between requests to prevent quota exhaustion
  */
 
 import { NextRequest, NextResponse } from 'next/server'
@@ -8,6 +9,61 @@ import { generateImages } from '@/lib/vertex-ai'
 import { buildCompletPrompt, buildPromptWithTextRendering, TemplateType } from '@/lib/prompt-engineering'
 import { createClient } from '@supabase/supabase-js'
 import { v4 as uuidv4 } from 'uuid'
+
+// ⏰ HARD 20-SECOND COOLDOWN - MANDATORY TO PREVENT QUOTA EXHAUSTION
+let lastRequestTime = 0
+const COOLDOWN_MS = 20000 // 20 seconds
+
+// Request queue to prevent concurrent API calls
+// Only allow one image generation at a time
+let isGenerating = false
+const requestQueue: Array<{
+  resolve: (value: any) => void
+  reject: (error: any) => void
+  fn: () => Promise<any>
+}> = []
+
+/**
+ * Process the request queue - ensures only one request runs at a time
+ */
+async function processQueue() {
+  if (isGenerating || requestQueue.length === 0) {
+    return
+  }
+
+  isGenerating = true
+  const queueSize = requestQueue.length
+  console.log(`\n📤 Processing queue (${queueSize} requests waiting)`)
+  
+  const { resolve, reject, fn } = requestQueue.shift()!
+
+  try {
+    console.log(`⏳ Starting image generation (${requestQueue.length} still in queue)`)
+    const result = await fn()
+    console.log(`✅ Image generation completed successfully`)
+    resolve(result)
+  } catch (error: any) {
+    console.error(`❌ Image generation failed:`, error?.message)
+    reject(error)
+  } finally {
+    isGenerating = false
+    // Process next request in queue
+    if (requestQueue.length > 0) {
+      console.log(`📤 Processing next request in queue...`)
+      processQueue()
+    }
+  }
+}
+
+/**
+ * Queue a request - ensures only one generation happens at a time
+ */
+function queueRequest<T>(fn: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    requestQueue.push({ resolve, reject, fn })
+    processQueue()
+  })
+}
 
 // Initialize Supabase client for storage (lazy initialization)
 function getSupabaseClient() {
@@ -48,24 +104,48 @@ interface GenerateImageResponse {
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<GenerateImageResponse>> {
-  try {
-    const body: GenerateImageRequest = await request.json()
+  // Check 15-second cooldown BEFORE queueing
+  const now = Date.now()
+  const timeSinceLastRequest = now - lastRequestTime
 
-    const { prompt: userPrompt, template, primaryColor, secondaryColor, accentColor, userId, useAIText, aiTextContent } = body
+  if (timeSinceLastRequest < COOLDOWN_MS) {
+    const waitMs = COOLDOWN_MS - timeSinceLastRequest
+    console.log(`⏳ COOLDOWN: Please wait ${Math.ceil(waitMs / 1000)}s before next request`)
+    
+    return NextResponse.json(
+      {
+        success: false,
+        images: [],
+        prompt: '',
+        error: `Please wait ${Math.ceil(waitMs / 1000)}s before generating another image (rate limit protection)`,
+      },
+      { status: 429 }
+    )
+  }
 
-    if (!userPrompt || !userPrompt.trim()) {
-      return NextResponse.json(
-        {
-          success: false,
-          images: [],
-          prompt: '',
-          error: 'Prompt is required',
-        },
-        { status: 400 }
-      )
-    }
+  // Update last request time
+  lastRequestTime = now
 
-    if (!template) {
+  // Queue the request to prevent concurrent API calls
+  return queueRequest(async () => {
+    try {
+      const body: GenerateImageRequest = await request.json()
+
+      const { prompt: userPrompt, template, primaryColor, secondaryColor, accentColor, userId, useAIText, aiTextContent } = body
+
+      if (!userPrompt || !userPrompt.trim()) {
+        return NextResponse.json(
+          {
+            success: false,
+            images: [],
+            prompt: '',
+            error: 'Prompt is required',
+          },
+          { status: 400 }
+        )
+      }
+
+      if (!template) {
       return NextResponse.json(
         {
           success: false,
@@ -107,14 +187,22 @@ export async function POST(request: NextRequest): Promise<NextResponse<GenerateI
     console.log('🎨 Template:', template)
 
     // Generate images using Imagen-4
-    console.log('🚀 Calling Imagen-4 API...')
+    console.log('\n' + '='.repeat(60))
+    console.log('🚀 REQUEST TO GENERATE IMAGES')
+    console.log('='.repeat(60))
+    console.log(`📝 Prompt length: ${completePrompt.length} chars`)
+    console.log(`🎨 Template: ${template}`)
+    console.log(`👤 User ID: ${userId || 'anonymous'}`)
+    console.log(`✨ AI Text Effects: ${useAIText}`)
+    console.log('='.repeat(60) + '\n')
+    
     let base64Images: string[] = []
 
     try {
       base64Images = await generateImages({
         prompt: completePrompt,
-        numberOfImages: 4,
-        sampleCount: 4,
+        numberOfImages: 1,
+        sampleCount: 1,
       })
     } catch (error: any) {
       console.error('🔴 Imagen-4 API error:', error)
@@ -266,4 +354,5 @@ export async function POST(request: NextRequest): Promise<NextResponse<GenerateI
       { status: 500 }
     )
   }
+  })
 }

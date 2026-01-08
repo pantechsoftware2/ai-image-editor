@@ -22,12 +22,21 @@ function getVertexAI(): VertexAI {
     )
   }
 
-  console.log(`🔐 Initializing Vertex AI with project: ${project}, location: ${location}`)
+  console.log(`\n🔐 Initializing Vertex AI:`)
+  console.log(`   Project: ${project}`)
+  console.log(`   Location: ${location}`)
 
-  return new VertexAI({
-    project,
-    location,
-  })
+  try {
+    const vertexAI = new VertexAI({
+      project,
+      location,
+    })
+    console.log(`✅ Vertex AI SDK initialized successfully`)
+    return vertexAI
+  } catch (error: any) {
+    console.error(`❌ Failed to initialize Vertex AI:`, error?.message)
+    throw error
+  }
 }
 
 export interface ImageGenerationOptions {
@@ -37,66 +46,28 @@ export interface ImageGenerationOptions {
   outputFormat?: string
 }
 
-// Track last request time to enforce minimum gap between requests
-let lastGenerateImageTime = 0
-const MIN_REQUEST_GAP_MS = 30000 // 30 seconds between requests to avoid quota
-
 /**
- * Enforces minimum gap between image generation requests
- * This prevents rapid-fire requests that trigger quota limits
- */
-async function enforceRequestGap(): Promise<void> {
-  const now = Date.now()
-  const timeSinceLastRequest = now - lastGenerateImageTime
-  
-  if (timeSinceLastRequest < MIN_REQUEST_GAP_MS) {
-    const delayNeeded = MIN_REQUEST_GAP_MS - timeSinceLastRequest
-    console.log(
-      `⏳ Server rate limiting: Waiting ${delayNeeded}ms before request (prevent quota)...`
-    )
-    await new Promise((resolve) => setTimeout(resolve, delayNeeded))
-  }
-  
-  lastGenerateImageTime = Date.now()
-}
-
-/**
- * Retry logic with exponential backoff
- * Used for handling rate limiting (429) and temporary errors
+ * DO NOT RETRY - Single attempt only
+ * 429 errors mean quota exhausted - retrying makes it worse
  */
 async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 6,
-  initialDelayMs: number = 20000
+  fn: () => Promise<T>
 ): Promise<T> {
-  let lastError: Error | null = null
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      // Enforce gap between requests on server to prevent quota hitting
-      await enforceRequestGap()
-      return await fn()
-    } catch (error: any) {
-      lastError = error
-      const status = error?.status || error?.code
-
-      // Only retry on rate limit (429) or temporary server errors (500, 503)
-      if (status !== 429 && status !== 500 && status !== 503) {
-        throw error
-      }
-
-      if (attempt < maxRetries - 1) {
-        // Very aggressive exponential backoff: 20s, 40s, 80s, 160s, 320s, 640s
-        const delayMs = initialDelayMs * Math.pow(2, attempt)
-        console.log(
-          `⏳ Rate limited (${status}). Retrying in ${delayMs / 1000}s... (Attempt ${attempt + 1}/${maxRetries})`
-        )
-        await new Promise((resolve) => setTimeout(resolve, delayMs))
-      }
-    }
+  try {
+    console.log(`\n🔄 API Call (Single Attempt - No Retries)...`)
+    const result = await fn()
+    console.log(`✅ API Call Successful`)
+    return result
+  } catch (error: any) {
+    console.error(`❌ API Call Failed:`, {
+      status: error?.status,
+      code: error?.code,
+      message: error?.message,
+    })
+    
+    // DO NOT RETRY on 429 - throw immediately
+    throw error
   }
-
-  throw lastError || new Error('Max retries exceeded')
 }
 
 /**
@@ -152,11 +123,18 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       ],
     }
 
-    console.log('🚀 Calling Imagen-4 API with ultra-aggressive rate limiting...')
+    console.log('🚀 Calling Imagen-4 API...')
+    console.log('📋 Request details:', {
+      model: 'imagegeneration@006',
+      promptLength: options.prompt.length,
+      hasRequest: !!request,
+    })
+    
     const response = await retryWithBackoff(
-      () => generativeModel.generateContent(request),
-      6, // max 6 attempts (vs 5)
-      20000 // initial 20 second delay (vs 5s)
+      () => {
+        console.log('   → Sending request to Vertex AI...')
+        return generativeModel.generateContent(request)
+      }
     )
     console.log('📦 Response received:', response ? 'success' : 'no response')
 
@@ -233,7 +211,7 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       )
     }
 
-    return images.slice(0, 4)
+    return images.slice(0, 1)
   } catch (error: any) {
     console.error('❌ Error in generateImages:', error)
     console.error('Error details:', {
@@ -241,6 +219,7 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       message: error?.message,
       code: error?.code,
       status: error?.status,
+      details: error?.details,
     })
 
     // Provide specific error message for quota issues
@@ -248,6 +227,14 @@ export async function generateImages(options: ImageGenerationOptions): Promise<s
       throw new Error(
         'Quota exceeded: Too many image generation requests. Please wait a moment and try again. ' +
         'If this persists, you may need to request a quota increase in Google Cloud Console.'
+      )
+    }
+
+    // Check for authentication errors
+    if (error?.message?.includes('UNAUTHENTICATED') || error?.message?.includes('Unable to generate an access token')) {
+      throw new Error(
+        'Google Cloud authentication failed. ' +
+        'Please run: gcloud auth application-default login'
       )
     }
 

@@ -3,6 +3,12 @@ import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
 import { ToastProvider } from "@/lib/toast-context";
+import { checkGoogleCloudSetup } from "@/lib/google-cloud-check";
+
+// Check Google Cloud setup on server startup
+if (process.env.NODE_ENV !== 'production') {
+  checkGoogleCloudSetup().catch(console.error)
+}
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,7 +25,7 @@ export const metadata: Metadata = {
   description: "Create stunning designs with AI-powered image generation and editing",
   viewport: "width=device-width, initial-scale=1, maximum-scale=5",
   icons: {
-    icon: "/vizly.png",
+    icon: "/vizly1.jpeg",
   },
 };
 
