@@ -33,9 +33,11 @@ export default function EditorPage() {
   const router = useRouter()
 
   useEffect(() => {
-    if (!authLoading && !user) {
-      router.push('/login')
-    }
+    // Allow access to editor without login for testing
+    // Uncomment the lines below to require authentication:
+    // if (!authLoading && !user) {
+    //   router.push('/login')
+    // }
   }, [user, authLoading, router])
 
   const extractBrand = async (e: React.FormEvent) => {
@@ -132,7 +134,7 @@ export default function EditorPage() {
                   Website URL
                 </label>
                 <Input
-                  type="url"
+                  type="text"
                   placeholder="apple.com or https://apple.com"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
